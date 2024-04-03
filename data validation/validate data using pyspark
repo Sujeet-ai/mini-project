@@ -1,1 +1,137 @@
-this will give you insights of data validation 
+#this will give you insights of data validation 
+
+##LAMBDA##
+
+import json
+import boto3
+import pandas as pd
+from io import StringIO
+from datetime import datetime
+import os
+
+def lambda_handler(event, context):
+    # Initialize Secrets Manager client
+    secrets_manager_client = boto3.client('secretsmanager', region_name='us-east-2')
+
+    secret_name = 'SS_covid'  # Replace with your actual secret name
+    response = secrets_manager_client.get_secret_value(SecretId=secret_name)
+    secret = json.loads(response['SecretString'])
+
+
+    s3_validated = secret['s3_validated']
+    #acutal path = s3://internalpoc2024/ss-covid/bronze/
+
+    destination_bucket = secret['Bucket']
+    source_key = secret['Key']
+
+    #actual path = s3://internalpoc2024/ss-covid/raw/part00.csv
+    
+    
+    
+    
+    
+    # Read CSV file from S3
+    s3 = boto3.client('s3')
+    obj = s3.get_object(Bucket=destination_bucket, Key=source_key)
+    
+    csv_data = obj['Body'].read().decode('utf-8')
+    df = pd.read_csv(StringIO(csv_data))
+
+    required_columns = ["UID", "ISO2", "ISO3", "CODE3", "FIPS", "ADMIN2", "PROVINCE_STATE", "COUNTRY_REGION", "LAT", "LONG_", "COMBINED_KEY", "DATED", "CONFIRMED", "DEATHS", "LOAD_TIMESTAMP"]
+
+    missing_columns = [col for col in required_columns if col not in df.columns]
+
+    if missing_columns:
+        missing_columns_str = ', '.join(missing_columns)
+        print("The following required columns are missing: {}".format(missing_columns_str))
+    elif df.empty:
+        print("DataFrame is empty. There are no records.")
+    else:
+        print("All required columns are present in the CSV file.")
+        # Write DataFrame to a file in S3
+        csv_buffer = StringIO()
+        df.to_csv(csv_buffer, index=False)
+        #s3.put_object(Bucket=destination_bucket, Key='s3_valid.csv', Body=csv_buffer.getvalue())
+        #current_date = datetime.now().strftime("%Y-%m-%d")
+        #current_date = datetime.now().strftime("%Y%m%d")
+
+     
+
+        #folder_name = 'validated'
+        folder_name = 'bronze'
+        file_name = 'output.csv'
+
+        # Construct the key with the folder name and file name
+        key = os.path.join(folder_name, file_name)
+
+        # Assuming csv_buffer is your StringIO object containing CSV data
+        # Replace csv_buffer with your actual StringIO object
+        s3.put_object(Bucket=destination_bucket, Key=key, Body=csv_buffer.getvalue())
+
+
+        # Assuming csv_buffer is your StringIO object containing CSV data
+        # Replace csv_buffer with your actual StringIO object
+        s3.put_object(Bucket=destination_bucket, Key=key, Body=csv_buffer.getvalue())
+        
+
+    return {
+        'statusCode': 200,
+        'body': json.dumps('CSV validation and writing completed successfully!')
+    }
+
+---------------------------------------------------------------------------------------------------------------
+
+##GLUE##
+
+
+import json
+from datetime import datetime
+import os
+from pyspark.context import SparkContext
+from pyspark.sql import SparkSession
+import boto3
+
+def glue_job():
+    # Initialize SparkSession
+    spark = SparkSession.builder \
+        .appName("CSVValidationAndWriting") \
+        .getOrCreate()
+    
+    # Initialize Secrets Manager client
+    secrets_manager_client = boto3.client('secretsmanager', region_name='us-east-2')
+
+    secret_name = 'SS_Covid'  # Replace with your actual secret name
+    response = secrets_manager_client.get_secret_value(SecretId=secret_name)
+    secret = json.loads(response['SecretString'])
+    s3_raw_data = secret['3_raw_data']
+    validated = secret['validated']
+    
+    # Read CSV file into DataFrame
+    #df = spark.read.csv("s3://{}/{}".format(destination_bucket, source_key), header=True)
+    df = spark.read.format("csv").options(header=True).load(s3_validated)
+
+
+    required_columns = ["UID", "ISO2", "ISO3", "CODE3", "FIPS", "ADMIN2", "PROVINCE_STATE", "COUNTRY_REGION", "LAT", "LONG_", "COMBINED_KEY", "DATED", "CONFIRMED", "DEATHS", "LOAD_TIMESTAMP"]
+
+    missing_columns = [col for col in required_columns if col not in df.columns]
+
+    if missing_columns:
+        missing_columns_str = ', '.join(missing_columns)
+        print("The following required columns are missing: {}".format(missing_columns_str))
+    elif df.count() == 0:
+        print("DataFrame is empty. There are no records.")
+    else:
+        print("All required columns are present in the CSV file.")
+        current_date = datetime.now().strftime("%Y%m%d")
+        folder_name = 'bronze'
+        file_name = 'output.csv'
+        key = os.path.join(folder_name, file_name)
+
+        # Write DataFrame to S3
+        #df.write.csv("s3://{}/{}".format(destination_bucket, key), mode="overwrite", header=True)
+        df.repartition(1).write.mode("overwrite").options(header=True).csv(s3_destination)
+        
+    spark.stop()
+
+glue_job()
+
