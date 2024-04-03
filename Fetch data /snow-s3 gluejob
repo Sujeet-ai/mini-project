@@ -1,1 +1,66 @@
-this file will give you how to fetch data from glue to s3 
+#this file will give you how to fetch data from glue to s3 
+
+import boto3
+from pyspark.context import SparkContext
+from awsglue.context import GlueContext
+from pyspark.sql import SparkSession
+import json
+from datetime import datetime
+
+# Initialize AWS Secrets Manager client
+secrets_manager_client = boto3.client('secretsmanager', region_name='us-east-2')
+
+# Get Snowflake secret
+snowflake_secret_name = 'SS_covid_snow'
+snowflake_secret = secrets_manager_client.get_secret_value(SecretId=snowflake_secret_name)
+sfOptions = eval(snowflake_secret['SecretString']) 
+
+# Get S3 secret for raw data location
+secret_name = 'SS_covid'  
+response = secrets_manager_client.get_secret_value(SecretId=secret_name)
+secret = json.loads(response['SecretString'])
+s3_raw_data = secret['s3_raw_data']
+
+#prod_path = s3://internalpoc2024/ss-covid/raw
+
+# Initialize Spark Context
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+
+# Read data from Snowflake
+df = spark.read.format("snowflake").options(**sfOptions).option("query", "SELECT * FROM COVID1").load()
+
+"""
+# Fetch data from Snowflake using Snowflake Python Connector
+def fetch_data_from_snowflake():
+    try:
+        ctx = snowflake.connector.connect(
+            user='SUJEETDB',
+            password='Hesoyam@9099',
+            account='zj23417.ap-southeast-1',
+            warehouse='COMPUTE_WH',
+            database='TEST',
+            schema='INSURANCE',
+            role='ACCOUNTADMIN'
+        )
+        query = "SELECT * FROM COVID1 WHERE LOAD_TIMESTAMP = TIMESTAMP '2024-03-19 00:16:41.355'"
+        df = pd.read_sql(query, ctx)
+        print(df)
+        return df
+    except Exception as e:
+        print(f"Error fetching data from Snowflake: {e}")
+        return pd.DataFrame()
+
+df = fetch_data_from_snowflake()
+"""
+
+# Write DataFrame to CSV format and save to S3
+df.write.format("csv") \
+    .option("header", "true") \
+    .mode("overwrite") \
+    .save(s3_raw_data)
+
+# Stop Spark Session
+spark.stop()
+
